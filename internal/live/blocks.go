@@ -36,10 +36,17 @@ type Block struct {
 	Widths    []int  // TableRow: 各列の表示幅
 	Header    bool   // TableRow: 見出し行
 	Delimiter bool   // TableRow: `| --- |` の行
+	Open      int    // Fence*: コードブロックの開始行
+	Close     int    // Fence*: コードブロックの終了行 (閉じていなければ最終行)
+}
+
+// IsDiagram は Mermaid の図を書くコードブロックの行か。
+func (b Block) IsDiagram() bool {
+	return (b.Kind == FenceOpen || b.Kind == FenceBody || b.Kind == FenceClose) && b.Language == "mermaid"
 }
 
 func (b Block) Equal(o Block) bool {
-	return b.Kind == o.Kind && b.Language == o.Language && b.Header == o.Header && b.Delimiter == o.Delimiter && slices.Equal(b.Widths, o.Widths)
+	return b.Kind == o.Kind && b.Language == o.Language && b.Open == o.Open && b.Close == o.Close && b.Header == o.Header && b.Delimiter == o.Delimiter && slices.Equal(b.Widths, o.Widths)
 }
 
 var (
@@ -53,13 +60,20 @@ func Analyze(lines []string) []Block {
 	blocks := make([]Block, len(lines))
 	fence := ""
 	language := ""
+	open := 0
+	closeFence := func(last int) {
+		for row := open; row <= last; row++ {
+			blocks[row].Open, blocks[row].Close = open, last
+		}
+	}
 	for i := 0; i < len(lines); {
 		line := lines[i]
 		if fence != "" {
 			trimmed := strings.TrimSpace(line)
 			if strings.HasPrefix(trimmed, fence) && strings.TrimSpace(trimmed[len(fence):]) == "" {
-				blocks[i] = Block{Kind: FenceClose}
+				blocks[i] = Block{Kind: FenceClose, Language: language}
 				fence = ""
+				closeFence(i)
 			} else {
 				blocks[i] = Block{Kind: FenceBody, Language: language}
 			}
@@ -67,7 +81,7 @@ func Analyze(lines []string) []Block {
 			continue
 		}
 		if m := fenceRe.FindStringSubmatch(line); m != nil {
-			fence, language = m[1], m[2]
+			fence, language, open = m[1], m[2], i
 			blocks[i] = Block{Kind: FenceOpen, Language: language}
 			i++
 			continue
@@ -85,6 +99,9 @@ func Analyze(lines []string) []Block {
 			continue
 		}
 		i++
+	}
+	if fence != "" {
+		closeFence(len(lines) - 1)
 	}
 	return blocks
 }

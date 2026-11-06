@@ -203,3 +203,47 @@ func TestUndoRestoresText(t *testing.T) {
 		t.Errorf("やり直せていません: %q", got)
 	}
 }
+
+func TestMermaidDrawsFigureUntilCursorEnters(t *testing.T) {
+	src := "先頭\n\n```mermaid\ngraph TD\n  A[企画] --> B[実装]\n```\n\n末尾"
+	h := start(t, map[string]string{"a.md": src}, "a.md")
+	h.contains("│ 企画 │")
+	h.lacks("A[企画]")
+	// 下から上へ入るとソースが見える
+	for range 3 {
+		h.key(tcell.KeyDown, 0)
+	}
+	h.key(tcell.KeyCtrlE, tcell.ModCtrl) // サイドバーへ移ると全部完成形
+	h.contains("│ 企画 │")
+	h.key(tcell.KeyEsc, 0)
+	h.app.editor.MoveTo(h.app.editor.End(), false)
+	h.app.draw()
+	h.key(tcell.KeyUp, 0)
+	h.key(tcell.KeyUp, 0)
+	h.contains("A[企画] --> B[実装]")
+	h.lacks("│ 企画 │")
+}
+
+func TestEscLeavesZenMode(t *testing.T) {
+	h := start(t, map[string]string{"a.md": "x"}, "a.md")
+	h.key(tcell.KeyF4, 0)
+	h.contains("Esc / F4 で集中モードを終わる")
+	h.key(tcell.KeyEsc, 0)
+	if h.app.zen {
+		t.Fatal("Esc で集中モードが終わっていません")
+	}
+	h.contains("^S 保存")
+}
+
+func TestSidebarMovesToParentFolder(t *testing.T) {
+	h := start(t, map[string]string{"sub/a.md": "x", "top.md": "y"}, "sub/a.md")
+	h.contains("..  親フォルダ")
+	h.lacks("top.md")
+	h.app.sidebar.activate(0)
+	h.app.draw()
+	h.contains("top.md")
+	h.contains("a.md")
+	if h.app.noteName() != filepath.Join("sub", "a.md") {
+		t.Errorf("開いているノートの名前: %q", h.app.noteName())
+	}
+}

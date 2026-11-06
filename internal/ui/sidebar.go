@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -24,6 +25,7 @@ const (
 type treeRow struct {
 	entry vault.Entry
 	depth int
+	up    bool // 親フォルダへ移る行
 }
 
 // sidebar はファイル一覧と目次。
@@ -52,10 +54,13 @@ func newSidebar(v *vault.Vault) *sidebar {
 // reload はフォルダの中身を読み直す。
 func (s *sidebar) reload() {
 	s.rows = s.rows[:0]
+	if parent := filepath.Dir(s.vault.Root); parent != s.vault.Root {
+		s.rows = append(s.rows, treeRow{entry: vault.Entry{Path: parent, Name: "..", IsDir: true}, up: true})
+	}
 	var walk func(dir string, depth int)
 	walk = func(dir string, depth int) {
 		for _, e := range s.vault.List(dir) {
-			s.rows = append(s.rows, treeRow{e, depth})
+			s.rows = append(s.rows, treeRow{entry: e, depth: depth})
 			if e.IsDir && s.expanded[e.Path] {
 				walk(e.Path, depth+1)
 			}
@@ -94,6 +99,10 @@ func (s *sidebar) activate(index int) {
 		s.jumpToLine(s.headings[index].Line)
 		return
 	}
+	if s.rows[index].up {
+		s.goUp()
+		return
+	}
 	e := s.rows[index].entry
 	if e.IsDir {
 		s.expanded[e.Path] = !s.expanded[e.Path]
@@ -101,6 +110,23 @@ func (s *sidebar) activate(index int) {
 		return
 	}
 	s.openFile(e.Path)
+}
+
+// goUp は一覧の根を親フォルダに移す。今いたフォルダは開いたままにする。
+func (s *sidebar) goUp() {
+	previous := s.vault.Root
+	parent := filepath.Dir(previous)
+	if parent == previous {
+		return
+	}
+	s.vault.Root = parent
+	s.expanded[previous] = true
+	s.reload()
+	for i, r := range s.rows {
+		if r.entry.Path == previous {
+			s.selected = i
+		}
+	}
 }
 
 func (s *sidebar) draw(scr tcell.Screen, r rect, t theme.Theme, focused bool) {
@@ -124,6 +150,9 @@ func (s *sidebar) draw(scr tcell.Screen, r rect, t theme.Theme, focused bool) {
 		x++
 	}
 
+	if s.tab == filesTab {
+		put(scr, r.x+1, r.y+1, r.w-1, "▣ "+shortPath(s.vault.Root, r.w-4), base.Over(theme.Style{Fg: t.Muted(), Italic: true}))
+	}
 	s.area = rect{r.x, r.y + 2, r.w, r.h - 2}
 	if s.selected < s.scroll {
 		s.scroll = s.selected
@@ -144,6 +173,8 @@ func (s *sidebar) draw(scr tcell.Screen, r rect, t theme.Theme, focused bool) {
 			tr := s.rows[index]
 			indent := strings.Repeat("  ", tr.depth)
 			switch {
+			case tr.up:
+				segments = []segment{{"↑ ", t.Faint()}, {"..", theme.Style{Fg: t.Secondary, Bold: true}}, {"  親フォルダ", t.Faint()}}
 			case tr.entry.IsDir && s.expanded[tr.entry.Path]:
 				segments = []segment{{indent + "▾ ", t.Faint()}, {tr.entry.Name, theme.Style{Fg: t.Secondary, Bold: true}}}
 			case tr.entry.IsDir:
@@ -181,6 +212,10 @@ func (s *sidebar) handleKey(ev *tcell.EventKey) bool {
 		s.selected = min(max(0, s.count()-1), s.selected+1)
 	case tcell.KeyEnter:
 		s.activate(s.selected)
+	case tcell.KeyBackspace, tcell.KeyBackspace2:
+		if s.tab == filesTab {
+			s.goUp()
+		}
 	case tcell.KeyTab:
 		s.tab = 1 - s.tab
 		s.selected, s.scroll = 0, 0
@@ -219,4 +254,19 @@ func (s *sidebar) handleMouse(ev *tcell.EventMouse) {
 			s.activate(s.scroll + y - s.area.y)
 		}
 	}
+}
+
+// shortPath はホームを ~ にし、幅に収まらなければ先頭を「…」で省く。
+func shortPath(path string, width int) string {
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(path, home) {
+		path = "~" + path[len(home):]
+	}
+	runes := []rune(path)
+	for len(runes) > 1 && textWidth(string(runes)) > width {
+		runes = runes[1:]
+		if textWidth("…"+string(runes)) <= width {
+			return "…" + string(runes)
+		}
+	}
+	return string(runes)
 }

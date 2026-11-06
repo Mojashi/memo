@@ -40,15 +40,29 @@ type layoutKey struct {
 	row       int // コードの色は行ごとに違うので、コードファイルでは行番号も鍵にする
 	width     int
 	concealed bool
+	diagram   string // Mermaid のコードブロックなら、その図のソース
 }
 
 type layout struct {
 	units  []live.Unit
 	breaks []int
 	fill   theme.Style
+	// 図: Mermaid のコードブロックは、開始行の下に図を描き、残りの行は画面に出さない
+	figure       []string
+	hidden       bool
+	figureSource int // 図をクリックしたときに移る行 (ソースの1行目)
+	figureEnd    int // 下から図に入ったときに移る行 (コードブロックの最終行)
 }
 
 func (l *layout) sections() int { return len(l.breaks) + 1 }
+
+// rows はこの行が画面で使う行数 (隠れた行は 0)。
+func (l *layout) rows() int {
+	if l.hidden {
+		return 0
+	}
+	return l.sections() + len(l.figure)
+}
 
 type Editor struct {
 	buf            *textbuf.Buffer
@@ -81,8 +95,12 @@ type Editor struct {
 	pasted    strings.Builder
 	mouse     mouseState
 
+	figures figureCache
+
 	// OnChange は本文が変わったときに呼ばれる。
 	OnChange func()
+	// Post は別スレッドで終わった処理 (図の描画) を画面の更新に渡す。
+	Post func(func())
 }
 
 func New(clipboard Clipboard, t theme.Theme) *Editor {
@@ -212,6 +230,10 @@ func (e *Editor) concealed(i int) bool {
 		return true
 	}
 	top, bottom := textbuf.Ordered(e.anchor, e.cursor)
+	// 図はコードブロックのどこかにカーソルがあれば、ブロックごとソースを見せる
+	if block := e.blockOf(i); block.IsDiagram() {
+		return block.Close < top.Row || block.Open > bottom.Row
+	}
 	return i < top.Row || i > bottom.Row
 }
 
@@ -222,11 +244,20 @@ func (e *Editor) layoutOf(i int) *layout {
 	if !e.markdown {
 		key.row = i
 	}
+	if key.concealed && block.IsDiagram() {
+		key.diagram = e.diagramSource(block)
+	}
 	if l, ok := e.layouts[key]; ok {
 		return l
 	}
 	if len(e.layouts) > 4*e.lineCount()+1024 {
 		e.invalidate()
+	}
+	if key.diagram != "" {
+		if l := e.figureLayout(i, text, block, key); l != nil {
+			e.layouts[key] = l
+			return l
+		}
 	}
 	var view live.View
 	if e.markdown {
@@ -267,11 +298,13 @@ func (e *Editor) rowOf(p Pos) rowRef {
 
 // next は1つ下の画面行。最後なら ok=false。
 func (e *Editor) next(r rowRef) (rowRef, bool) {
-	if r.section+1 < e.layoutOf(r.line).sections() {
+	if r.section+1 < e.layoutOf(r.line).rows() {
 		return rowRef{r.line, r.section + 1}, true
 	}
-	if r.line+1 < e.lineCount() {
-		return rowRef{r.line + 1, 0}, true
+	for line := r.line + 1; line < e.lineCount(); line++ {
+		if e.layoutOf(line).rows() > 0 {
+			return rowRef{line, 0}, true
+		}
 	}
 	return r, false
 }
@@ -281,8 +314,10 @@ func (e *Editor) prev(r rowRef) (rowRef, bool) {
 	if r.section > 0 {
 		return rowRef{r.line, r.section - 1}, true
 	}
-	if r.line > 0 {
-		return rowRef{r.line - 1, e.layoutOf(r.line-1).sections() - 1}, true
+	for line := r.line - 1; line >= 0; line-- {
+		if rows := e.layoutOf(line).rows(); rows > 0 {
+			return rowRef{line, rows - 1}, true
+		}
 	}
 	return r, false
 }
@@ -294,7 +329,10 @@ func before(a, b rowRef) bool {
 // clampTop は top を今の折り返しで有効な位置に直す。
 func (e *Editor) clampTop() {
 	e.top.line = max(0, min(e.top.line, e.lineCount()-1))
-	e.top.section = max(0, min(e.top.section, e.layoutOf(e.top.line).sections()-1))
+	for e.top.line > 0 && e.layoutOf(e.top.line).hidden {
+		e.top = rowRef{e.top.line - 1, 1 << 30}
+	}
+	e.top.section = max(0, min(e.top.section, e.layoutOf(e.top.line).rows()-1))
 }
 
 // scrollIntoView はカーソルが画面に入るようにスクロールする。
@@ -357,6 +395,9 @@ func (e *Editor) posAt(x, y int) Pos {
 		r = next
 	}
 	l := e.layoutOf(r.line)
+	if r.section >= l.sections() {
+		return at(l.figureSource, 0) // 図をクリックしたらソースを開く
+	}
 	return at(r.line, live.ColumnAt(l.units, l.breaks, r.section, max(0, x-(e.textX-e.x)), e.lineLen(r.line)))
 }
 
@@ -399,6 +440,11 @@ func (e *Editor) Draw(screen tcell.Screen, x, y, w, h int) (cx, cy int, ok bool)
 		}
 		if l.fill != (theme.Style{}) {
 			fillRect(screen, e.textX, sy, e.textW, 1, base.Over(l.fill).Cell())
+		}
+		if r.section >= l.sections() {
+			drawText(screen, e.textX+1, sy, e.textW-1, l.figure[r.section-l.sections()], base.Over(l.fill).Cell())
+			r, more = e.next(r)
+			continue
 		}
 		sx := e.textX
 		for _, u := range live.SectionUnits(l.units, l.breaks, r.section) {

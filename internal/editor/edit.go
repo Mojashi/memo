@@ -402,6 +402,9 @@ func (e *Editor) vertical(n int) Pos {
 		r = prev
 	}
 	l = e.layoutOf(r.line)
+	if r.section >= l.sections() {
+		return at(l.figureEnd, 0) // 図の上に来たら、コードブロックの最後の行へ
+	}
 	return at(r.line, live.ColumnAt(l.units, l.breaks, r.section, e.wantX, e.lineLen(r.line)))
 }
 

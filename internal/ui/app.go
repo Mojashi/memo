@@ -127,6 +127,7 @@ func newApp(screen tcell.Screen, path string) (*App, error) {
 	a := &App{screen: screen, vault: v, theme: theme.Named(conf.Theme), showSidebar: true}
 	a.editor = editor.New(&clipboard{screen: screen}, a.theme)
 	a.editor.OnChange = a.textChanged
+	a.editor.Post = a.post
 	a.sidebar = newSidebar(v)
 	a.sidebar.openFile = a.openNote
 	a.sidebar.jumpToLine = a.jumpTo
@@ -637,6 +638,10 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		run()
 		return
 	}
+	if a.zen && ev.Key() == tcell.KeyEsc {
+		a.toggleZen()
+		return
+	}
 	if a.focus == focusSidebar {
 		if ev.Key() == tcell.KeyEsc {
 			a.focusEditor()
@@ -829,6 +834,10 @@ func (a *App) drawStatus(r rect) {
 		segment{fmt.Sprintf("%s 行", comma(a.stats.Lines)), theme.Style{}}, sep,
 		segment{fmt.Sprintf("読了 約%d分", minutes), theme.Style{}},
 	)
+	if a.zen {
+		hint := " Esc / F4 で集中モードを終わる "
+		put(a.screen, r.x+r.w-textWidth(hint)-1, r.y, textWidth(hint), hint, theme.Style{Fg: t.Accent, Bg: t.Panel, Bold: true})
+	}
 }
 
 func (a *App) drawKeys(r rect) {

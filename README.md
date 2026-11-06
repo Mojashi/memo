@@ -2,9 +2,13 @@
 
 ターミナルで書く、リッチな Markdown ノートエディタ。
 
+![memo のスクリーンショット](docs/screenshot.png)
+
 - **ライブプレビュー**: カーソルのある行だけ Markdown の記号を見せ、ほかの行は完成形で描きます
   (見出し・☐/☑ チェックリスト・箇条書き・引用・表・コードブロック・太字/斜体/リンク)
 - **表は罫線つきで桁を揃えます**。日本語の全角幅にも対応し、画面に収まらないセルは「…」で切ります
+- **Mermaid の図をその場で描きます** (flowchart / graph・sequenceDiagram・erDiagram。描画は [mermaid-ascii](https://github.com/AlexanderGrooff/mermaid-ascii))。
+  コードブロックにカーソルを入れるとソースに戻ります
 - ファイル一覧・目次・全文検索・コマンドパレット・自動保存・テーマ
 - Markdown 以外のテキストファイルも行番号つき・色付きで開けます
 - マウス対応 (クリック・ドラッグ選択・☐ のクリック・ツールバー)
@@ -30,8 +34,8 @@ memo todo.md    # ファイルを開く (親フォルダが一覧に出る)
 | Ctrl+S / Ctrl+N / Ctrl+O | 保存 / 新しいノート / ファイルを開く |
 | Ctrl+F | 全ノートを検索 (ファイル名と本文) |
 | Ctrl+P | コマンドパレット (テーマ変更もここから) |
-| Ctrl+E | サイドバーへ移動 / 戻る |
-| F2 / F4 / F6 | サイドバー / 集中モード / 記号を全部見せる |
+| Ctrl+E | サイドバーへ移動 / 戻る (サイドバーで Backspace か `..` で親フォルダへ) |
+| F2 / F4 / F6 | サイドバー / 集中モード (Esc でも戻る) / 記号を全部見せる |
 | Ctrl+B / Ctrl+L / Ctrl+T | 太字 / リンク / チェックの切り替え |
 | Ctrl+Z / Ctrl+Y | 元に戻す / やり直す |
 | Option+← → (Ctrl+← →) | 単語ごとに移動 (Shift で選択) |
@@ -44,5 +48,8 @@ Enter でリスト・チェックリスト・番号・引用が続きます。�
 
 ```sh
 go test ./...
-go run . 
+go run .
+# README のスクリーンショットを撮り直す
+MEMO_SCREENSHOT=$PWD/docs/screenshot.svg go test ./internal/ui -run Screenshot -count=1
+rsvg-convert -z 2 docs/screenshot.svg -o docs/screenshot.png
 ```
