@@ -102,6 +102,8 @@ func (s *server) serve(conn net.Conn) {
 	defer conn.Close()
 	t := &tab{browser: s.browser}
 	defer t.close()
+	pages := &tab{browser: s.browser, blank: true}
+	defer pages.close()
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 1<<20), 1<<26)
 	encoder := json.NewEncoder(conn)
@@ -112,20 +114,26 @@ func (s *server) serve(conn net.Conn) {
 			continue
 		}
 		status := func(message string) { _ = encoder.Encode(reply{Status: message}) }
-		pages, err := t.render(req.Markdown, req.Dir, status)
+		var images []string
+		var err error
+		if req.Page != "" {
+			images, err = pages.renderPage(req.Page, status)
+		} else {
+			images, err = t.render(req.Markdown, req.Dir, status)
+		}
 		if err != nil {
-			t.close()
-			t.ctx = nil // 次の依頼でタブを開き直す
+			t.close() // 次の依頼でタブを開き直す
+			pages.close()
 			_ = encoder.Encode(reply{Error: err.Error()})
 			continue
 		}
-		_ = encoder.Encode(reply{Pages: pages})
+		_ = encoder.Encode(reply{Pages: images})
 	}
 }
 
-// removeOldImages はしばらく使われていない PNG を消す。
+// removeOldImages はしばらく使われていない画像 (と HTML の撮影の目録) を消す。
 func removeOldImages(dir string) {
-	files, _ := filepath.Glob(filepath.Join(dir, "*.png"))
+	files, _ := filepath.Glob(filepath.Join(dir, "*"))
 	for _, file := range files {
 		if info, err := os.Stat(file); err == nil && time.Since(info.ModTime()) > imageLifetime {
 			_ = os.Remove(file)

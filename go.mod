@@ -10,6 +10,7 @@ require (
 	github.com/mattn/go-runewidth v0.0.19
 	github.com/rivo/uniseg v0.4.7
 	github.com/sirupsen/logrus v1.9.0
+	golang.org/x/image v0.33.0
 )
 
 require (

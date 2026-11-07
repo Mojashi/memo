@@ -65,6 +65,9 @@ type App struct {
 	editor  *editor.Editor
 	sidebar *sidebar
 	slides  *slidePane
+	viewer  *viewer // 画像や HTML を見ているとき (エディタの代わりに出す)
+	render  *renderService
+	images  *imageLayer
 	note    note
 	focus   focus
 	dialogs []dialog
@@ -109,7 +112,8 @@ func Run(path string) error {
 		return err
 	}
 	a.loop()
-	a.slides.close(screen)
+	a.images.close(screen)
+	a.render.close()
 	return nil
 }
 
@@ -130,11 +134,18 @@ func newApp(screen tcell.Screen, path string) (*App, error) {
 	a.editor = editor.New(&clipboard{screen: screen}, a.theme)
 	a.editor.OnChange = a.textChanged
 	a.editor.Post = a.post
-	a.slides = newSlidePane(a.post)
+	a.render = &renderService{}
+	a.images = &imageLayer{}
+	a.slides = newSlidePane(a.post, a.render, a.images)
 	a.sidebar = newSidebar(v)
 	a.sidebar.openFile = a.openNote
 	a.sidebar.jumpToLine = a.jumpTo
-	a.sidebar.currentPath = func() string { return a.note.path }
+	a.sidebar.currentPath = func() string {
+		if a.viewer != nil {
+			return a.viewer.path
+		}
+		return a.note.path
+	}
 
 	if initial != "" {
 		a.openNote(initial)
@@ -213,6 +224,10 @@ func (a *App) fail(err error) {
 // ── ノートを開く・保存する ──────────────────────────────
 
 func (a *App) openNote(path string) {
+	if isViewable(path) {
+		a.view(path)
+		return
+	}
 	text, err := vault.ReadText(path)
 	if err != nil {
 		a.fail(err)
@@ -225,6 +240,7 @@ func (a *App) openNote(path string) {
 }
 
 func (a *App) show(n note, text string) {
+	a.viewer = nil
 	a.note = n
 	markdown := vault.IsMarkdown(n.path)
 	var lexer = syntax.ForFile(n.path)
@@ -241,7 +257,45 @@ func (a *App) show(n note, text string) {
 	a.settle()
 }
 
+// view は画像や HTML のファイルを、エディタの代わりに見せる (編集中のノートは保存しておく)。
+func (a *App) view(path string) {
+	a.saveIfNeeded()
+	a.viewer = openViewer(path, a.render, a.post)
+	a.focus = focusEditor
+	a.sidebar.reveal(path)
+	a.screen.SetTitle("memo — " + a.noteName())
+}
+
+// closeViewer は見ていたファイルを閉じ、ノートに戻る。
+func (a *App) closeViewer() {
+	a.viewer = nil
+	a.screen.SetTitle("memo — " + a.noteName())
+}
+
+func (a *App) openViewerExternally() {
+	if err := openExternally(a.viewer.path); err != nil {
+		a.fail(err)
+	}
+}
+
+// viewerKey は画像や HTML を見ているときのキー。
+func (a *App) viewerKey(ev *tcell.EventKey) {
+	switch {
+	case ev.Key() == tcell.KeyEsc:
+		a.closeViewer()
+	case ev.Key() == tcell.KeyRune && ev.Rune() == 'o':
+		a.openViewerExternally()
+	case ev.Key() == tcell.KeyDown || ev.Key() == tcell.KeyPgDn || (ev.Key() == tcell.KeyRune && ev.Rune() == ' '):
+		a.viewer.scroll(1)
+	case ev.Key() == tcell.KeyUp || ev.Key() == tcell.KeyPgUp:
+		a.viewer.scroll(-1)
+	}
+}
+
 func (a *App) noteName() string {
+	if a.viewer != nil {
+		return a.vault.Relative(a.viewer.path)
+	}
 	if a.note.path == "" {
 		return "未命名"
 	}
@@ -314,6 +368,10 @@ func (a *App) newNote() {
 }
 
 func (a *App) rename() {
+	if a.viewer != nil {
+		a.notify("画像や HTML の名前はまだ変えられません")
+		return
+	}
 	if a.note.path == "" {
 		a.save()
 		return
@@ -481,7 +539,7 @@ func fuzzyMatch(text, query string) bool {
 // ── 書式・表示切替 ──────────────────────────────────────
 
 func (a *App) applyFormat(id string) {
-	if !a.editor.IsMarkdown() {
+	if !a.editor.IsMarkdown() || a.viewer != nil {
 		return
 	}
 	a.editor.ApplyFormat(format.ByID(id).Format)
@@ -663,6 +721,10 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		a.toggleZen()
 		return
 	}
+	if a.viewer != nil && a.focus == focusEditor {
+		a.viewerKey(ev)
+		return
+	}
 	if a.focus == focusSidebar {
 		if ev.Key() == tcell.KeyEsc {
 			a.focusEditor()
@@ -700,6 +762,18 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		return
 	}
 	switch {
+	case a.editorArea.contains(x, y) && a.viewer != nil:
+		switch {
+		case ev.Buttons()&tcell.Button1 != 0:
+			a.focusEditor()
+			if a.viewer.openButton.contains(x, y) {
+				a.openViewerExternally()
+			}
+		case ev.Buttons()&tcell.WheelDown != 0:
+			a.viewer.scroll(1)
+		case ev.Buttons()&tcell.WheelUp != 0:
+			a.viewer.scroll(-1)
+		}
 	case a.editorArea.contains(x, y):
 		if ev.Buttons()&tcell.Button1 != 0 {
 			a.focusEditor()
@@ -761,14 +835,8 @@ func (a *App) draw() {
 		width := min(main.w, zenWidth)
 		main = rect{main.x + (main.w-width)/2, main.y + 1, width, main.h - 1}
 	}
-	if index, total := a.editor.Slide(); total > 0 && !a.zen {
-		if width := a.slides.width(main.w); width > 0 {
-			main.w -= width
-			a.slides.draw(s, rect{main.x + main.w, main.y, width, main.h}, t, index, total)
-		}
-	}
 	a.editorArea = main
-	cx, cy, cursor := a.editor.Draw(s, main.x, main.y, main.w, main.h)
+	cx, cy, cursor := a.drawMain(main)
 
 	a.drawStatus(rect{0, h - footer, w, 1})
 	if !a.zen {
@@ -788,7 +856,24 @@ func (a *App) draw() {
 		s.HideCursor()
 	}
 	s.Show()
-	a.slides.flush(s)
+	a.images.flush(s)
+}
+
+// drawMain は main に、見ているファイル (画像・HTML) か、エディタ (Marp ならスライドも) を描く。
+// エディタのカーソルを出す位置を返す。
+func (a *App) drawMain(main rect) (cx, cy int, cursor bool) {
+	if a.viewer != nil {
+		a.viewer.draw(a.screen, main, a.theme, a.images)
+		return 0, 0, false
+	}
+	if index, total := a.editor.Slide(); total > 0 && !a.zen {
+		if width := a.slides.width(main.w); width > 0 {
+			main.w -= width
+			a.slides.draw(a.screen, rect{main.x + main.w, main.y, width, main.h}, a.theme, index, total)
+		}
+	}
+	a.editorArea = main
+	return a.editor.Draw(a.screen, main.x, main.y, main.w, main.h)
 }
 
 func (a *App) drawTitle(r rect) {
@@ -813,7 +898,7 @@ func (a *App) drawToolbar(r rect) {
 		a.toolbar = append(a.toolbar, toolButton{label, style, run, rect{x, r.y, width, 1}})
 		x += width
 	}
-	if a.editor.IsMarkdown() {
+	if a.editor.IsMarkdown() && a.viewer == nil {
 		looks := map[string]theme.Style{"bold": {Bold: true}, "italic": {Italic: true}, "strike": {Strike: true}}
 		for i, group := range format.ToolbarGroups {
 			if i > 0 {
@@ -851,8 +936,14 @@ func (a *App) drawStatus(r rect) {
 	if a.note.path == "" && a.editor.Text() == welcome {
 		state = segment{" ようこそ ", theme.Style{Fg: t.Accent, Bold: true}}
 	}
-	cursor := a.editor.Cursor()
 	sep := segment{"  │  ", theme.Style{Fg: t.Background}}
+	if a.viewer != nil {
+		putSegments(a.screen, r.x, r.y, r.w, base,
+			segment{" ◉ 表示のみ ", theme.Style{Fg: t.Accent, Bold: true}}, sep,
+			segment{a.viewer.info(), theme.Style{}})
+		return
+	}
+	cursor := a.editor.Cursor()
 	minutes := max(1, int(math.Round(a.stats.ReadingMinutes)))
 	putSegments(a.screen, r.x, r.y, r.w, base,
 		state, sep,
@@ -876,7 +967,12 @@ func (a *App) drawKeys(r rect) {
 		{"^S", "保存"}, {"^N", "新規"}, {"^O", "開く"}, {"^F", "検索"}, {"^P", "コマンド"},
 		{"^E", "ファイル一覧"}, {"F2", "サイド"}, {"F4", "集中"}, {"F6", "記号"}, {"^Q", "終了"},
 	}
-	if a.editor.IsMarp() {
+	if a.viewer != nil {
+		keys = [][2]string{{"o", "ブラウザ・アプリで開く"}, {"Esc", "ノートに戻る"}, {"^O", "開く"}, {"^E", "ファイル一覧"}, {"^Q", "終了"}}
+		if a.viewer.page {
+			keys = append(keys[:2], append([][2]string{{"↑↓", "めくる"}}, keys[2:]...)...)
+		}
+	} else if a.editor.IsMarp() {
 		keys = append(keys[:len(keys)-1], [2]string{"F7", "スライド"}, keys[len(keys)-1])
 	}
 	var segments []segment

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 )
 
@@ -30,12 +31,17 @@ func Detect() (Terminal, error) {
 		}
 		return Terminal{}, errors.New("この端末は画像を出せません。\nkitty か Ghostty で使えます")
 	}
-	outer, err := exec.Command("tmux", "display", "-p", "#{client_termtype}").Output()
+	// このセッションにつながっている端末 (いくつもあり得る) のどれかが画像を出せればよい
+	session, err := exec.Command("tmux", "display", "-p", "#{session_name}").Output()
+	if err != nil {
+		return Terminal{}, fmt.Errorf("tmux のセッションを調べられません: %w", err)
+	}
+	clients, err := exec.Command("tmux", "list-clients", "-t", strings.TrimSpace(string(session)), "-F", "#{client_termtype}").Output()
 	if err != nil {
 		return Terminal{}, fmt.Errorf("tmux の外側の端末を調べられません: %w", err)
 	}
-	if name := strings.ToLower(string(outer)); !strings.Contains(name, "kitty") && !strings.Contains(name, "ghostty") {
-		return Terminal{}, fmt.Errorf("tmux の外側の端末 (%s) は画像を出せません", strings.TrimSpace(string(outer)))
+	if !slices.ContainsFunc(strings.Split(strings.ToLower(string(clients)), "\n"), supportsImages) {
+		return Terminal{}, fmt.Errorf("tmux の外側の端末 (%s) は画像を出せません", strings.Join(strings.Fields(string(clients)), ", "))
 	}
 	passthrough, err := exec.Command("tmux", "show", "-Apv", "allow-passthrough").Output()
 	if err != nil {
@@ -45,6 +51,10 @@ func Detect() (Terminal, error) {
 		return Terminal{}, errors.New("tmux が画像を通していません。\n~/.tmux.conf に次の1行を足して読み込み直すと出せます:\n\n  set -g allow-passthrough on")
 	}
 	return Terminal{tmux: true}, nil
+}
+
+func supportsImages(termtype string) bool {
+	return strings.Contains(termtype, "kitty") || strings.Contains(termtype, "ghostty")
 }
 
 // Show は path の PNG を画像 id として端末に送り、cols×rows マスに収まるように置く命令。

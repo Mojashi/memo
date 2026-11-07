@@ -12,6 +12,8 @@
 - **Marp のスライド**: front matter に `marp: true` があると、`---` を「スライド 2 / 5」の区切りとして描き、
   `<!-- _class: lead -->` のような指示は ⚙ で控えめに見せます。
   カーソルのあるスライドを [Marp](https://marp.app) の**本物の見た目の画像で右側に出します** (kitty / Ghostty。F7 で表示切替)
+- **画像 (PNG / JPEG / GIF / WebP / BMP) と HTML・SVG をその場で見られます**。HTML は Chrome で描いた静止画で、
+  縦に長いページは ↑↓ でめくります。「↗ 開く」(か `o`) でブラウザや既定のアプリで開きます (kitty / Ghostty)
 - ファイル一覧・目次・全文検索・コマンドパレット・自動保存・テーマ
 - Markdown 以外のテキストファイルも行番号つき・色付きで開けます
 - マウス対応 (クリック・ドラッグ選択・☐ のクリック・ツールバー)
@@ -48,13 +50,14 @@ memo todo.md    # ファイルを開く (親フォルダが一覧に出る)
 
 Enter でリスト・チェックリスト・番号・引用が続きます。空の項目で Enter すると記号が消えます。
 
-### Marp のスライドを画像で見る
+### Marp のスライド・画像・HTML を見る
 
 追加で入れるものはありません (Node や marp-cli も不要)。
 
 - スライドは memo に埋め込んだ [marp-core](https://github.com/marp-team/marp-core) を Chrome で動かして描きます。
   Chrome (Chromium / Edge / Brave) が入っていればそれを使い、無ければ描画用の
   [chrome-headless-shell](https://developer.chrome.com/blog/chrome-headless-shell) (約 100MB) を初回に自動で取ってきます
+- HTML・SVG のファイルも同じ仕組み (Chrome) で描きます
 - 描画は裏で動く描画サーバー (`memo --slide-server`) が受け持ち、memo をいくつ開いても1つを共有します。
   Chrome を起動したまま使い回し、変わったスライドだけを描き直します (最初の1回は約1秒、その後は 0.1 秒ほど)。
   誰もつながっていない状態が5分続くと終わります

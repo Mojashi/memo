@@ -7,18 +7,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/Mojashi/memo/internal/graphics"
-	"github.com/Mojashi/memo/internal/slides"
 	"github.com/Mojashi/memo/internal/theme"
 )
-
-// slideImageID は端末に送るスライド画像の id。文字色 (256 色の番号) で表すので 16〜255。
-const slideImageID = 238
-
-// slideRenderer はスライドを1枚ずつの PNG にする (複数の memo で共有する描画サーバー)。
-type slideRenderer interface {
-	Render(source, dir string, status func(string)) ([]string, error)
-	Close()
-}
 
 // slidePane は Marp の文書で、カーソルのあるスライドを描画サーバーで描いた画像として右側に出す。
 //
@@ -27,13 +17,8 @@ type slideRenderer interface {
 type slidePane struct {
 	visible bool
 	post    func(func())
-
-	// 初めて Marp の文書を開いたときに調べる
-	prepared bool
-	term     graphics.Terminal
-	termErr  error
-	marp     slideRenderer
-	marpErr  error
+	render  *renderService
+	images  *imageLayer
 
 	requested string // 最後に描くよう頼まれたソース
 	dir       string
@@ -43,45 +28,14 @@ type slidePane struct {
 	pages     []string
 	err       error
 	progress  string // 描画サーバーからの途中経過 (Chrome を取ってきているなど)
-
-	shown   shownImage // 端末に送ってある画像
-	pending string     // 次に画面を更新したあと、端末へ送る命令
 }
 
-type shownImage struct {
-	path       string
-	cols, rows int
+func newSlidePane(post func(func()), render *renderService, images *imageLayer) *slidePane {
+	return &slidePane{visible: true, post: post, render: render, images: images}
 }
-
-func newSlidePane(post func(func())) *slidePane {
-	return &slidePane{visible: true, post: post}
-}
-
-// prepare は画像を出せる端末か・marp があるかを調べる (一度だけ)。
-func (p *slidePane) prepare() {
-	if p.prepared {
-		return
-	}
-	p.prepared = true
-	p.term, p.termErr = detectTerminal()
-	p.marp, p.marpErr = findMarp()
-}
-
-// テストで差し替える
-var (
-	findMarp = func() (slideRenderer, error) {
-		client, err := slides.Connect()
-		if err != nil {
-			return nil, err
-		}
-		return client, nil
-	}
-	detectTerminal = graphics.Detect
-)
 
 // request は source を描き直すよう頼む。dir は画像などの相対パスの基準。
 func (p *slidePane) request(source, dir string) {
-	p.prepare()
 	if p.problem() != nil || source == p.requested {
 		return
 	}
@@ -98,7 +52,8 @@ func (p *slidePane) start() {
 	p.gen++
 	gen, source, dir := p.gen, p.requested, p.dir
 	go func() {
-		pages, err := p.marp.Render(source, dir, func(message string) {
+		r, _ := p.render.get()
+		pages, err := r.Render(source, dir, func(message string) {
 			p.post(func() { p.progress = message })
 		})
 		p.post(func() { p.finished(gen, pages, err) })
@@ -151,7 +106,7 @@ func (p *slidePane) draw(s tcell.Screen, r rect, t theme.Theme, index, total int
 		message = errors.New(p.progress)
 	}
 	if p.problem() == nil && index-1 < len(p.pages) && rows > 0 {
-		p.place(s, rect{inner.x, inner.y + 2, cols, rows}, p.pages[index-1], base)
+		p.images.place(s, rect{inner.x, inner.y + 2, cols, rows}, slideImageID, p.pages[index-1], base)
 		if p.err != nil {
 			message = p.err
 		}
@@ -173,45 +128,8 @@ func (p *slidePane) draw(s tcell.Screen, r rect, t theme.Theme, index, total int
 
 // problem は画像を出せない理由 (出せるなら nil)。
 func (p *slidePane) problem() error {
-	if p.marpErr != nil {
-		return p.marpErr
+	if _, err := p.render.get(); err != nil {
+		return err
 	}
-	return p.termErr
-}
-
-// place は area に画像を置く。端末へ送っていない絵や大きさなら、送る命令を用意する。
-func (p *slidePane) place(s tcell.Screen, area rect, path string, base theme.Style) {
-	image := shownImage{path, area.w, area.h}
-	if image != p.shown {
-		p.shown = image
-		p.pending = p.term.Show(slideImageID, path, area.w, area.h)
-	}
-	style := base.Cell().Foreground(tcell.PaletteColor(slideImageID))
-	for row := range area.h {
-		for col := range area.w {
-			s.SetContent(area.x+col, area.y+row, graphics.Placeholder, graphics.Cell(row, col), style)
-		}
-	}
-}
-
-// flush は用意した命令を端末へ送る (画面を更新したあとに呼ぶ)。
-func (p *slidePane) flush(s tcell.Screen) {
-	if p.pending == "" {
-		return
-	}
-	if tty, ok := s.Tty(); ok {
-		_, _ = tty.Write([]byte(p.pending))
-	}
-	p.pending = ""
-}
-
-// close は端末から画像を消し、描画サーバーとのつながりを切る。
-func (p *slidePane) close(s tcell.Screen) {
-	if p.shown.path != "" {
-		p.pending = p.term.Delete(slideImageID)
-		p.flush(s)
-	}
-	if p.marp != nil {
-		p.marp.Close()
-	}
+	return p.images.problem()
 }

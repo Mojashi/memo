@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"sync"
 	"time"
 )
 
@@ -23,6 +24,7 @@ type Client struct {
 	paths Paths
 	start func() error // 描画サーバーを起動する
 
+	mu     sync.Mutex // スライドと HTML の依頼が重ならないように
 	conn   net.Conn
 	reader *bufio.Scanner
 }
@@ -69,15 +71,26 @@ func startServer(self string, paths Paths) error {
 }
 
 // Render は Markdown のソースを1枚ずつの PNG にし、そのパスをスライド順に返す。
-// 途中経過 (Chrome を取ってきているなど) は status に知らせる。同時に呼ばないこと。
+// 途中経過 (Chrome を取ってきているなど) は status に知らせる。
 func (c *Client) Render(source, dir string, status func(string)) ([]string, error) {
+	return c.ask(request{Markdown: source, Dir: dir}, status)
+}
+
+// RenderPage は HTML (や SVG) のファイルを静止画にし、上から 1280×720 ずつに切った PNG のパスを返す。
+func (c *Client) RenderPage(file string, status func(string)) ([]string, error) {
+	return c.ask(request{Page: file}, status)
+}
+
+func (c *Client) ask(req request, status func(string)) ([]string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if err := c.connect(); err != nil {
 		return nil, err
 	}
-	pages, err := c.exchange(request{Markdown: source, Dir: dir}, status)
+	pages, err := c.exchange(req, status)
 	var failed *RenderError
 	if err != nil && !errors.As(err, &failed) {
-		c.Close() // つながりが壊れた。次はつなぎ直す
+		c.closeLocked() // つながりが壊れた。次はつなぎ直す
 	}
 	return pages, err
 }
@@ -145,6 +158,12 @@ func (c *Client) connect() error {
 
 // Close は描画サーバーとのつながりを切る (描画サーバーは他の memo のために残る)。
 func (c *Client) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closeLocked()
+}
+
+func (c *Client) closeLocked() {
 	if c.conn != nil {
 		c.conn.Close()
 		c.conn, c.reader = nil, nil

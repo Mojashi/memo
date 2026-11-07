@@ -3,6 +3,7 @@ package slides
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
@@ -86,5 +87,27 @@ func TestSecondServerStepsAside(t *testing.T) {
 	time.Sleep(50 * time.Millisecond) // 1つ目がロックを取るのを待つ
 	if err := serve(paths, time.Second); err != ErrServerRunning {
 		t.Errorf("2つ目の描画サーバーは身を引くはず: %v", err)
+	}
+}
+
+func TestPageIsCutIntoScreens(t *testing.T) {
+	paths := startTestServer(t)
+	client := NewClient(paths, func() error { return nil })
+	defer client.Close()
+	dir := t.TempDir()
+	page := filepath.Join(dir, "page.html")
+	if err := os.WriteFile(page, []byte(`<!doctype html><body style="margin:0"><h1>見出し</h1><div style="height:2000px;background:linear-gradient(red,blue)"></div></body>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	chunks, err := client.RenderPage(page, ignore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) != 3 { // 2000px 余りを 720px ずつ
+		t.Fatalf("3枚に切るはず: %v", chunks)
+	}
+	again, err := client.RenderPage(page, ignore)
+	if err != nil || again[0] != chunks[0] {
+		t.Errorf("変わっていなければ撮り直さない: %v %v", again, err)
 	}
 }

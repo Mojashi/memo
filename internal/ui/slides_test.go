@@ -26,19 +26,26 @@ func (f *fakeMarp) Render(source, dir string, status func(string)) ([]string, er
 	return paths, nil
 }
 
+func (f *fakeMarp) RenderPage(file string, status func(string)) ([]string, error) {
+	return []string{"/cache/page-000.png", "/cache/page-001.png", "/cache/page-002.png"}, nil
+}
+
 func (f *fakeMarp) Close() {}
 
-func withSlides(t *testing.T, marp slideRenderer, marpErr, termErr error) {
+func withSlides(t *testing.T, marp renderer, marpErr, termErr error) {
 	t.Helper()
-	oldFind, oldDetect := findMarp, detectTerminal
-	findMarp = func() (slideRenderer, error) { return marp, marpErr }
+	oldFind, oldDetect := findRenderer, detectTerminal
+	findRenderer = func() (renderer, error) { return marp, marpErr }
 	detectTerminal = func() (graphics.Terminal, error) { return graphics.Terminal{}, termErr }
-	t.Cleanup(func() { findMarp, detectTerminal = oldFind, oldDetect })
+	t.Cleanup(func() { findRenderer, detectTerminal = oldFind, oldDetect })
 }
 
 // waitSlides は裏で描いているスライドが終わるまで、メインループに届く処理を実行する。
-func (h *harness) waitSlides() {
-	for h.app.slides.rendering {
+func (h *harness) waitSlides() { h.waitFor(func() bool { return !h.app.slides.rendering }) }
+
+// waitFor は done になるまで、メインループに届く処理を実行する。
+func (h *harness) waitFor(done func() bool) {
+	for !done() {
 		if call, ok := h.screen.PollEvent().(*callEvent); ok {
 			call.fn()
 		}
@@ -69,14 +76,14 @@ func TestMarpShowsCurrentSlideImage(t *testing.T) {
 	if !placeholderAt(h) {
 		t.Fatalf("スライドの画像を置いていません:\n%s", h.screenText())
 	}
-	if !strings.HasSuffix(h.app.slides.shown.path, "slide.001.png") {
-		t.Errorf("1枚目を出すはず: %q", h.app.slides.shown.path)
+	if !strings.HasSuffix(h.app.images.shown[slideImageID].path, "slide.001.png") {
+		t.Errorf("1枚目を出すはず: %q", h.app.images.shown[slideImageID].path)
 	}
 	h.app.editor.MoveTo(textbuf.Pos{Row: 8, Col: 0}, false)
 	h.app.draw()
 	h.contains("▶ スライド 2 / 2")
-	if !strings.HasSuffix(h.app.slides.shown.path, "slide.002.png") {
-		t.Errorf("2枚目を出すはず: %q", h.app.slides.shown.path)
+	if !strings.HasSuffix(h.app.images.shown[slideImageID].path, "slide.002.png") {
+		t.Errorf("2枚目を出すはず: %q", h.app.images.shown[slideImageID].path)
 	}
 	h.key(tcell.KeyF7, 0)
 	h.lacks("▶ スライド")

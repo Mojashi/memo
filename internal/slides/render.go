@@ -108,6 +108,7 @@ func (b *browser) close() {
 // tab は1つの memo が使うタブ。
 type tab struct {
 	browser *browser
+	blank   bool // スライド用のページを開かない (HTML を開くタブ)
 	ctx     context.Context
 	cancel  context.CancelFunc
 }
@@ -122,6 +123,9 @@ func (t *tab) open(status func(string)) error {
 	}
 	ctx, cancel := chromedp.NewContext(parent)
 	page := url.URL{Scheme: "file", Path: t.browser.paths.page()}
+	if t.blank {
+		page = url.URL{Scheme: "about", Opaque: "blank"}
+	}
 	if err := chromedp.Do(ctx,
 		chromedp.EmulateViewport(1280, 720),
 		chromedp.Navigate(page.String()),
@@ -137,6 +141,7 @@ func (t *tab) close() {
 	if t.cancel != nil {
 		t.cancel()
 	}
+	t.ctx, t.cancel = nil, nil
 }
 
 type marpOutput struct {
