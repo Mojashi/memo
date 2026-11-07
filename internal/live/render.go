@@ -1,6 +1,7 @@
 package live
 
 import (
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -63,6 +64,26 @@ func Render(line string, block Block, width int, concealed bool, palette *Palett
 		tableRow(c, block, FitColumns(block.Widths, width), palette)
 	case Prose:
 		prose(c, width, palette)
+	case FrontMatter:
+		fill = palette.CodeBlock
+		switch {
+		case block.Header:
+			label := "front matter"
+			if block.Marp {
+				label = "marp"
+			}
+			c.replace(0, len(c.line), " "+label+" ", palette.CodeLabel)
+		case block.Delimiter:
+			c.replace(0, len(c.line), "", palette.Marker)
+		default:
+			c.style(0, len(c.line), palette.Marker)
+		}
+	case SlideBreak:
+		label := fmt.Sprintf(" スライド %d / %d ", block.Slide, block.Slides)
+		c.replace(0, len(c.line), "──"+label+strings.Repeat("─", max(3, width-3-Width(label))), palette.Rule)
+	case Directive:
+		inner := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(line), "<!--"), "-->"))
+		c.replace(0, len(c.line), "⚙ "+inner, palette.Marker.Over(theme.Style{Italic: true}))
 	}
 	if concealed {
 		return View{Units: c.concealed(), Fill: fill}

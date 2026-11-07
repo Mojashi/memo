@@ -110,3 +110,34 @@ func TestNarrowTableTruncatesCells(t *testing.T) {
 		t.Log(got)
 	}
 }
+
+func TestMarpSlides(t *testing.T) {
+	got := show(
+		"---", "marp: true", "---",
+		"<!-- _class: lead -->", "# 表紙",
+		"---",
+		"## 二枚目", "```", "---", "```",
+	)
+	want := []string{
+		" marp ", "marp: true", "",
+		"⚙ _class: lead", "表紙",
+		"── スライド 2 / 2 " + strings.Repeat("─", 21),
+		"二枚目", " code ", "---", "",
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("%d 行目\n got %q\nwant %q", i, got[i], want[i])
+		}
+	}
+	blocks := Analyze([]string{"---", "marp: true", "---", "a", "---", "b"})
+	if blocks[3].Slide != 1 || blocks[5].Slide != 2 || blocks[5].Slides != 2 {
+		t.Errorf("スライド番号: %+v", blocks)
+	}
+}
+
+func TestFrontMatterWithoutMarpHasNoSlides(t *testing.T) {
+	blocks := Analyze([]string{"---", "title: x", "---", "a", "---", "b"})
+	if blocks[0].Kind != FrontMatter || blocks[4].Kind != Prose || blocks[5].Slides != 0 {
+		t.Errorf("Marp でない文書: %+v", blocks)
+	}
+}

@@ -90,3 +90,24 @@ fmt.Println("コードブロックも色付きで")
 
 > このバッファは名前がないので、Ctrl+S で名前を付けて保存できます。
 `
+
+// wrapText は文字列を表示幅 width ごとの行に分ける (改行も行の区切り)。
+func wrapText(s string, width int) []string {
+	var lines []string
+	for _, paragraph := range strings.Split(s, "\n") {
+		var b strings.Builder
+		used := 0
+		for _, r := range paragraph {
+			w := textWidth(string(r))
+			if used+w > width && used > 0 {
+				lines = append(lines, b.String())
+				b.Reset()
+				used = 0
+			}
+			b.WriteRune(r)
+			used += w
+		}
+		lines = append(lines, b.String())
+	}
+	return lines
+}

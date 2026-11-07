@@ -218,7 +218,30 @@ func blockKey(b live.Block) string {
 		s.WriteByte(',')
 		s.WriteString(strconv.Itoa(w))
 	}
+	switch b.Kind {
+	case live.FrontMatter:
+		if b.Marp {
+			s.WriteByte('M')
+		}
+	case live.SlideBreak: // 番号はスライドの区切りにだけ描くので、他の行の鍵には入れない
+		s.WriteString("/" + strconv.Itoa(b.Slide) + "/" + strconv.Itoa(b.Slides))
+	}
 	return s.String()
+}
+
+// Slide はカーソルのあるスライドの番号と枚数。Marp の文書でなければ (0, 0)。
+func (e *Editor) Slide() (index, total int) {
+	if !e.markdown {
+		return 0, 0
+	}
+	b := e.blockOf(e.cursor.Row)
+	return b.Slide, b.Slides
+}
+
+// IsMarp は Marp のスライドの文書か (front matter に `marp: true`)。
+func (e *Editor) IsMarp() bool {
+	_, total := e.Slide()
+	return total > 0
 }
 
 // concealed は i 行目を記号を隠した完成形で描くか。

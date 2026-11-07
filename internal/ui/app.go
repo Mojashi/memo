@@ -64,6 +64,7 @@ type App struct {
 	theme   theme.Theme
 	editor  *editor.Editor
 	sidebar *sidebar
+	slides  *slidePane
 	note    note
 	focus   focus
 	dialogs []dialog
@@ -108,6 +109,7 @@ func Run(path string) error {
 		return err
 	}
 	a.loop()
+	a.slides.close(screen)
 	return nil
 }
 
@@ -128,6 +130,7 @@ func newApp(screen tcell.Screen, path string) (*App, error) {
 	a.editor = editor.New(&clipboard{screen: screen}, a.theme)
 	a.editor.OnChange = a.textChanged
 	a.editor.Post = a.post
+	a.slides = newSlidePane(a.post)
 	a.sidebar = newSidebar(v)
 	a.sidebar.openFile = a.openNote
 	a.sidebar.jumpToLine = a.jumpTo
@@ -371,6 +374,17 @@ func (a *App) settle() {
 		a.sidebar.headings = nil
 	}
 	a.editor.Recolor()
+	if a.editor.IsMarp() {
+		a.slides.request(a.editor.Text(), a.noteDir())
+	}
+}
+
+// noteDir はノートのあるフォルダ (未命名なら開いているフォルダ)。
+func (a *App) noteDir() string {
+	if a.note.path == "" {
+		return a.vault.Root
+	}
+	return filepath.Dir(a.note.path)
 }
 
 // ── 移動・検索 ──────────────────────────────────────────
@@ -486,6 +500,10 @@ func (a *App) toggleZen() {
 	a.focusEditor()
 }
 
+func (a *App) toggleSlides() {
+	a.slides.visible = !a.slides.visible
+}
+
 func (a *App) toggleRaw() {
 	a.raw = !a.raw
 	a.editor.SetLive(a.editor.IsMarkdown() && !a.raw)
@@ -531,6 +549,7 @@ func (a *App) commands() []command {
 		{"サイドバーへ移動", "Ctrl+E", a.focusSidebar},
 		{"集中モード", "F4", a.toggleZen},
 		{"記号表示切替", "F6  Markdown の記号を全部見せる / 完成形で見せる", a.toggleRaw},
+		{"スライド表示切替", "F7  Marp のスライドを画像で見る", a.toggleSlides},
 	}
 	for _, t := range theme.All {
 		cmds = append(cmds, command{"テーマ: " + t.Name, "", func() { a.setTheme(t) }})
@@ -603,6 +622,8 @@ func (a *App) shortcut(ev *tcell.EventKey) func() {
 		return a.toggleZen
 	case tcell.KeyF6:
 		return a.toggleRaw
+	case tcell.KeyF7:
+		return a.toggleSlides
 	}
 	shortcuts := []struct {
 		letter rune
@@ -740,6 +761,12 @@ func (a *App) draw() {
 		width := min(main.w, zenWidth)
 		main = rect{main.x + (main.w-width)/2, main.y + 1, width, main.h - 1}
 	}
+	if index, total := a.editor.Slide(); total > 0 && !a.zen {
+		if width := a.slides.width(main.w); width > 0 {
+			main.w -= width
+			a.slides.draw(s, rect{main.x + main.w, main.y, width, main.h}, t, index, total)
+		}
+	}
 	a.editorArea = main
 	cx, cy, cursor := a.editor.Draw(s, main.x, main.y, main.w, main.h)
 
@@ -761,6 +788,7 @@ func (a *App) draw() {
 		s.HideCursor()
 	}
 	s.Show()
+	a.slides.flush(s)
 }
 
 func (a *App) drawTitle(r rect) {
@@ -847,6 +875,9 @@ func (a *App) drawKeys(r rect) {
 	keys := [][2]string{
 		{"^S", "保存"}, {"^N", "新規"}, {"^O", "開く"}, {"^F", "検索"}, {"^P", "コマンド"},
 		{"^E", "ファイル一覧"}, {"F2", "サイド"}, {"F4", "集中"}, {"F6", "記号"}, {"^Q", "終了"},
+	}
+	if a.editor.IsMarp() {
+		keys = append(keys[:len(keys)-1], [2]string{"F7", "スライド"}, keys[len(keys)-1])
 	}
 	var segments []segment
 	for _, k := range keys {

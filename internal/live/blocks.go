@@ -27,6 +27,9 @@ const (
 	FenceBody
 	FenceClose
 	TableRow
+	FrontMatter // 先頭の `---` で囲んだ設定 (YAML)
+	SlideBreak  // Marp のスライドの区切り `---`
+	Directive   // Marp の指示コメント `<!-- _class: lead -->` だけの行
 )
 
 // Block は1行の文脈。コードブロックの言語や表の列幅を持つ。
@@ -34,10 +37,14 @@ type Block struct {
 	Kind      BlockKind
 	Language  string // FenceOpen / FenceBody
 	Widths    []int  // TableRow: 各列の表示幅
-	Header    bool   // TableRow: 見出し行
-	Delimiter bool   // TableRow: `| --- |` の行
+	Header    bool   // TableRow: 見出し行 / FrontMatter: 開始の `---`
+	Delimiter bool   // TableRow: `| --- |` の行 / FrontMatter: 終わりの `---`
 	Open      int    // Fence*: コードブロックの開始行
 	Close     int    // Fence*: コードブロックの終了行 (閉じていなければ最終行)
+	// Marp のスライド (front matter に `marp: true` がある文書だけ)
+	Marp   bool
+	Slide  int // この行が属するスライドの番号 (1 から)
+	Slides int // スライドの枚数
 }
 
 // IsDiagram は Mermaid の図を書くコードブロックの行か。
@@ -46,13 +53,16 @@ func (b Block) IsDiagram() bool {
 }
 
 func (b Block) Equal(o Block) bool {
-	return b.Kind == o.Kind && b.Language == o.Language && b.Open == o.Open && b.Close == o.Close && b.Header == o.Header && b.Delimiter == o.Delimiter && slices.Equal(b.Widths, o.Widths)
+	return b.Kind == o.Kind && b.Language == o.Language && b.Open == o.Open && b.Close == o.Close && b.Header == o.Header && b.Delimiter == o.Delimiter && slices.Equal(b.Widths, o.Widths) &&
+		b.Marp == o.Marp && b.Slide == o.Slide && b.Slides == o.Slides
 }
 
 var (
 	fenceRe          = regexp.MustCompile("^\\s*(`{3,}|~{3,})\\s*([\\w+#.-]*)")
 	tableRowRe       = regexp.MustCompile(`^\s*\|.*\|\s*$`)
 	tableDelimiterRe = regexp.MustCompile(`^\s*\|(\s*:?-+:?\s*\|)+\s*$`)
+	marpOnRe         = regexp.MustCompile(`^marp:\s*true\s*$`)
+	directiveRe      = regexp.MustCompile(`^\s*<!--.*-->\s*$`)
 )
 
 // Analyze は各行がどの文脈にあるかを返す。
@@ -66,7 +76,11 @@ func Analyze(lines []string) []Block {
 			blocks[row].Open, blocks[row].Close = open, last
 		}
 	}
-	for i := 0; i < len(lines); {
+	start, marp := frontMatter(lines)
+	for row := range start {
+		blocks[row] = Block{Kind: FrontMatter, Marp: marp, Header: row == 0, Delimiter: row == start-1}
+	}
+	for i := start; i < len(lines); {
 		line := lines[i]
 		if fence != "" {
 			trimmed := strings.TrimSpace(line)
@@ -83,6 +97,16 @@ func Analyze(lines []string) []Block {
 		if m := fenceRe.FindStringSubmatch(line); m != nil {
 			fence, language, open = m[1], m[2], i
 			blocks[i] = Block{Kind: FenceOpen, Language: language}
+			i++
+			continue
+		}
+		if marp && isRule([]rune(line)) {
+			blocks[i] = Block{Kind: SlideBreak}
+			i++
+			continue
+		}
+		if marp && directiveRe.MatchString(line) {
+			blocks[i] = Block{Kind: Directive}
 			i++
 			continue
 		}
@@ -103,7 +127,39 @@ func Analyze(lines []string) []Block {
 	if fence != "" {
 		closeFence(len(lines) - 1)
 	}
+	if marp {
+		numberSlides(blocks, start)
+	}
 	return blocks
+}
+
+// frontMatter は先頭の `---` 〜 `---` の行数 (無ければ 0) と、それが Marp の文書か。
+func frontMatter(lines []string) (end int, marp bool) {
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return 0, false
+	}
+	for i := 1; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed == "---" || trimmed == "..." {
+			return i + 1, marp
+		}
+		marp = marp || marpOnRe.MatchString(trimmed)
+	}
+	return 0, false // 閉じていなければ front matter ではない
+}
+
+// numberSlides は Marp の文書の各行に、属するスライドの番号と枚数を書き込む。
+func numberSlides(blocks []Block, start int) {
+	slide := 1
+	for i := range blocks {
+		if i >= start && blocks[i].Kind == SlideBreak {
+			slide++
+		}
+		blocks[i].Marp, blocks[i].Slide = true, slide
+	}
+	for i := range blocks {
+		blocks[i].Slides = slide
+	}
 }
 
 func tableWidths(rows []string) []int {

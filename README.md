@@ -9,6 +9,9 @@
 - **表は罫線つきで桁を揃えます**。日本語の全角幅にも対応し、画面に収まらないセルは「…」で切ります
 - **Mermaid の図をその場で描きます** (flowchart / graph・sequenceDiagram・erDiagram。描画は [mermaid-ascii](https://github.com/AlexanderGrooff/mermaid-ascii))。
   コードブロックにカーソルを入れるとソースに戻ります
+- **Marp のスライド**: front matter に `marp: true` があると、`---` を「スライド 2 / 5」の区切りとして描き、
+  `<!-- _class: lead -->` のような指示は ⚙ で控えめに見せます。
+  [marp-cli](https://github.com/marp-team/marp-cli) が入っていれば、カーソルのあるスライドを**本物の見た目の画像で右側に出します** (kitty / Ghostty。F7 で表示切替)
 - ファイル一覧・目次・全文検索・コマンドパレット・自動保存・テーマ
 - Markdown 以外のテキストファイルも行番号つき・色付きで開けます
 - マウス対応 (クリック・ドラッグ選択・☐ のクリック・ツールバー)
@@ -36,6 +39,7 @@ memo todo.md    # ファイルを開く (親フォルダが一覧に出る)
 | Ctrl+P | コマンドパレット (テーマ変更もここから) |
 | Ctrl+E | サイドバーへ移動 / 戻る (サイドバーで Backspace か `..` で親フォルダへ) |
 | F2 / F4 / F6 | サイドバー / 集中モード (Esc でも戻る) / 記号を全部見せる |
+| F7 | Marp のスライドの画像を出す / しまう |
 | Ctrl+B / Ctrl+L / Ctrl+T | 太字 / リンク / チェックの切り替え |
 | Ctrl+Z / Ctrl+Y | 元に戻す / やり直す |
 | Option+← → (Ctrl+← →) | 単語ごとに移動 (Shift で選択) |
@@ -43,6 +47,21 @@ memo todo.md    # ファイルを開く (親フォルダが一覧に出る)
 | Ctrl+Q | 終了 (名前のあるノートは保存してから) |
 
 Enter でリスト・チェックリスト・番号・引用が続きます。空の項目で Enter すると記号が消えます。
+
+### Marp のスライドを画像で見る
+
+```sh
+npm i -g @marp-team/marp-cli   # 中で Chrome を使います
+```
+
+画像は kitty の画像表示 (Unicode プレースホルダー) で出すので、kitty か Ghostty で使えます。
+tmux の中で使うときは `~/.tmux.conf` に次の1行が要ります。
+
+```tmux
+set -g allow-passthrough on
+```
+
+入力が落ち着くたびに文書全体を書き出し直します (1回 2〜4 秒ほど)。
 
 ## 開発
 
