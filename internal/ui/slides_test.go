@@ -25,6 +25,8 @@ func (f *fakeMarp) Render(source, dir, out string) ([]string, error) {
 	return paths, nil
 }
 
+func (f *fakeMarp) Close() {}
+
 func withSlides(t *testing.T, marp slideRenderer, marpErr, termErr error) {
 	t.Helper()
 	oldFind, oldDetect := findMarp, detectTerminal

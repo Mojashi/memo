@@ -3,8 +3,6 @@ package ui
 import (
 	"fmt"
 	"os"
-	"path/filepath"
-	"strconv"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -16,9 +14,10 @@ import (
 // slideImageID は端末に送るスライド画像の id。文字色 (256 色の番号) で表すので 16〜255。
 const slideImageID = 238
 
-// slideRenderer はスライドを1枚ずつの PNG にする (marp-cli)。
+// slideRenderer はスライドを1枚ずつの PNG にする (常駐する marp の描画サーバー)。
 type slideRenderer interface {
 	Render(source, dir, out string) ([]string, error)
+	Close()
 }
 
 // slidePane は Marp の文書で、カーソルのあるスライドを marp-cli で描いた画像として右側に出す。
@@ -73,7 +72,13 @@ func (p *slidePane) prepare() {
 
 // テストで差し替える
 var (
-	findMarp       = func() (slideRenderer, error) { return slides.Find() }
+	findMarp = func() (slideRenderer, error) {
+		server, err := slides.Find()
+		if err != nil {
+			return nil, err
+		}
+		return server, nil
+	}
 	detectTerminal = graphics.Detect
 )
 
@@ -94,8 +99,7 @@ func (p *slidePane) request(source, dir string) {
 func (p *slidePane) start() {
 	p.rendering = true
 	p.gen++
-	gen, source, dir := p.gen, p.requested, p.dir
-	out := filepath.Join(p.cacheDir, strconv.Itoa(gen))
+	gen, source, dir, out := p.gen, p.requested, p.dir, p.cacheDir
 	go func() {
 		pages, err := p.marp.Render(source, dir, out)
 		p.post(func() { p.finished(gen, pages, err) })
@@ -105,10 +109,8 @@ func (p *slidePane) start() {
 func (p *slidePane) finished(gen int, pages []string, err error) {
 	p.rendering = false
 	p.err = err
-	if err == nil {
+	if err == nil && gen == p.gen {
 		p.pages = pages
-		// 端末が読み終えているはずの、2つ前の書き出しを消す
-		_ = os.RemoveAll(filepath.Join(p.cacheDir, strconv.Itoa(gen-2)))
 	}
 	if p.queued {
 		p.queued = false
@@ -203,6 +205,9 @@ func (p *slidePane) close(s tcell.Screen) {
 	if p.shown.path != "" {
 		p.pending = p.term.Delete(slideImageID)
 		p.flush(s)
+	}
+	if p.marp != nil {
+		p.marp.Close()
 	}
 	if p.cacheDir != "" {
 		_ = os.RemoveAll(p.cacheDir)
