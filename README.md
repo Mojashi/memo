@@ -11,7 +11,7 @@
   コードブロックにカーソルを入れるとソースに戻ります
 - **Marp のスライド**: front matter に `marp: true` があると、`---` を「スライド 2 / 5」の区切りとして描き、
   `<!-- _class: lead -->` のような指示は ⚙ で控えめに見せます。
-  [marp-cli](https://github.com/marp-team/marp-cli) が入っていれば、カーソルのあるスライドを**本物の見た目の画像で右側に出します** (kitty / Ghostty。F7 で表示切替)
+  カーソルのあるスライドを [Marp](https://marp.app) の**本物の見た目の画像で右側に出します** (kitty / Ghostty。F7 で表示切替)
 - ファイル一覧・目次・全文検索・コマンドパレット・自動保存・テーマ
 - Markdown 以外のテキストファイルも行番号つき・色付きで開けます
 - マウス対応 (クリック・ドラッグ選択・☐ のクリック・ツールバー)
@@ -50,9 +50,15 @@ Enter でリスト・チェックリスト・番号・引用が続きます。�
 
 ### Marp のスライドを画像で見る
 
-```sh
-npm i -g @marp-team/marp-cli   # 中で Chrome を使います
-```
+追加で入れるものはありません (Node や marp-cli も不要)。
+
+- スライドは memo に埋め込んだ [marp-core](https://github.com/marp-team/marp-core) を Chrome で動かして描きます。
+  Chrome (Chromium / Edge / Brave) が入っていればそれを使い、無ければ描画用の
+  [chrome-headless-shell](https://developer.chrome.com/blog/chrome-headless-shell) (約 100MB) を初回に自動で取ってきます
+- 描画は裏で動く描画サーバー (`memo --slide-server`) が受け持ち、memo をいくつ開いても1つを共有します。
+  Chrome を起動したまま使い回し、変わったスライドだけを描き直します (最初の1回は約1秒、その後は 0.1 秒ほど)。
+  誰もつながっていない状態が5分続くと終わります
+- 置き場は `~/Library/Caches/memo/slides` (Linux は `~/.cache/memo/slides`)。`CHROME_PATH` で使う Chrome を指定できます
 
 画像は kitty の画像表示 (Unicode プレースホルダー) で出すので、kitty か Ghostty で使えます。
 tmux の中で使うときは `~/.tmux.conf` に次の1行が要ります。
@@ -60,8 +66,6 @@ tmux の中で使うときは `~/.tmux.conf` に次の1行が要ります。
 ```tmux
 set -g allow-passthrough on
 ```
-
-marp-cli に入っている marp-core と Chrome を裏で起動したままにして、入力が落ち着くたびに変わったスライドだけを描き直します (最初の1回は約1秒、その後は 0.1 秒ほど)。
 
 ## 開発
 
@@ -71,4 +75,6 @@ go run .
 # README のスクリーンショットを撮り直す
 MEMO_SCREENSHOT=$PWD/docs/screenshot.svg go test ./internal/ui -run Screenshot -count=1
 rsvg-convert -z 2 docs/screenshot.svg -o docs/screenshot.png
+# 埋め込みの marp-core を作り直す (internal/slides/marp.js)
+cd tools/marp-bundle && npm install && npm run build
 ```

@@ -2,18 +2,54 @@ package slides
 
 import (
 	"os"
-	"path/filepath"
+	"os/exec"
+	"runtime"
 	"testing"
+	"time"
 )
 
-func TestRenderWritesOnePNGPerSlide(t *testing.T) {
-	marp, err := Find()
-	if err != nil {
-		t.Skip(err) // CI には marp-cli が無い
+const deck = "---\nmarp: true\n---\n\n# 一枚目\n\n---\n\n## 二枚目\n"
+
+// startTestServer は描画サーバーをこのプロセスの中で動かす。テストが終わると Chrome ごと止まる。
+func startTestServer(t *testing.T) Paths {
+	t.Helper()
+	found := false
+	for _, name := range installedChromes[runtime.GOOS] {
+		if _, err := exec.LookPath(name); err == nil {
+			found = true
+		}
 	}
-	defer marp.Close()
-	dir := t.TempDir()
-	pages, err := marp.Render("---\nmarp: true\n---\n\n# 一枚目\n\n---\n\n## 二枚目\n", dir, filepath.Join(dir, "out"))
+	if !found {
+		t.Skip("Chrome が入っていない (このテストのために取ってくるのは重い)")
+	}
+	dir, err := os.MkdirTemp("", "ms") // Unix ソケットのパスは短くないといけない
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := Paths{dir}
+	done := make(chan error, 1)
+	go func() { done <- serve(paths, 200*time.Millisecond) }()
+	t.Cleanup(func() {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Error(err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Error("誰もつながっていないのに描画サーバーが終わりません")
+		}
+		os.RemoveAll(dir)
+	})
+	return paths
+}
+
+func ignore(string) {}
+
+func TestSharedServerRendersOnlyChangedSlides(t *testing.T) {
+	paths := startTestServer(t)
+	first := NewClient(paths, func() error { return nil }) // 描画サーバーは startTestServer で起動済み
+	defer first.Close()
+	pages, err := first.Render(deck, t.TempDir(), ignore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,12 +61,30 @@ func TestRenderWritesOnePNGPerSlide(t *testing.T) {
 			t.Errorf("画像がありません: %s %v", page, err)
 		}
 	}
-	// 2枚目だけ変えると、1枚目は描き直さず同じ画像のまま
-	again, err := marp.Render("---\nmarp: true\n---\n\n# 一枚目\n\n---\n\n## 変えた\n", dir, filepath.Join(dir, "out"))
+
+	// 別の memo からつないでも同じ描画サーバーを使い、同じスライドは同じ画像になる
+	second := NewClient(paths, func() error { t.Fatal("描画サーバーを2つ起動しようとしました"); return nil })
+	defer second.Close()
+	changed, err := second.Render("---\nmarp: true\n---\n\n# 一枚目\n\n---\n\n## 変えた\n", os.TempDir(), ignore)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again[0] != pages[0] || again[1] == pages[1] {
-		t.Errorf("変わったスライドだけ描き直すはず:\n%v\n%v", pages, again)
+	if changed[1] == pages[1] {
+		t.Errorf("変えたスライドは別の画像になるはず: %v %v", pages, changed)
+	}
+	again, err := first.Render(deck, os.TempDir(), ignore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again[0] != changed[0] {
+		t.Errorf("同じスライドは同じ画像のはず: %v %v", again, changed)
+	}
+}
+
+func TestSecondServerStepsAside(t *testing.T) {
+	paths := startTestServer(t)
+	time.Sleep(50 * time.Millisecond) // 1つ目がロックを取るのを待つ
+	if err := serve(paths, time.Second); err != ErrServerRunning {
+		t.Errorf("2つ目の描画サーバーは身を引くはず: %v", err)
 	}
 }

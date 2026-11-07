@@ -1,8 +1,8 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
-	"os"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -14,16 +14,16 @@ import (
 // slideImageID は端末に送るスライド画像の id。文字色 (256 色の番号) で表すので 16〜255。
 const slideImageID = 238
 
-// slideRenderer はスライドを1枚ずつの PNG にする (常駐する marp の描画サーバー)。
+// slideRenderer はスライドを1枚ずつの PNG にする (複数の memo で共有する描画サーバー)。
 type slideRenderer interface {
-	Render(source, dir, out string) ([]string, error)
+	Render(source, dir string, status func(string)) ([]string, error)
 	Close()
 }
 
-// slidePane は Marp の文書で、カーソルのあるスライドを marp-cli で描いた画像として右側に出す。
+// slidePane は Marp の文書で、カーソルのあるスライドを描画サーバーで描いた画像として右側に出す。
 //
 //   - 入力が落ち着いたら文書全体を描き直す。描いている間に来た依頼は、終わってから最新の1つだけ描く
-//   - 画像は kitty の画像表示で出す。出せない端末や marp が無いときは、理由を代わりに出す
+//   - 画像は kitty の画像表示で出す。出せない端末や描けないときは、理由を代わりに出す
 type slidePane struct {
 	visible bool
 	post    func(func())
@@ -34,7 +34,6 @@ type slidePane struct {
 	termErr  error
 	marp     slideRenderer
 	marpErr  error
-	cacheDir string
 
 	requested string // 最後に描くよう頼まれたソース
 	dir       string
@@ -43,6 +42,7 @@ type slidePane struct {
 	gen       int
 	pages     []string
 	err       error
+	progress  string // 描画サーバーからの途中経過 (Chrome を取ってきているなど)
 
 	shown   shownImage // 端末に送ってある画像
 	pending string     // 次に画面を更新したあと、端末へ送る命令
@@ -65,19 +65,16 @@ func (p *slidePane) prepare() {
 	p.prepared = true
 	p.term, p.termErr = detectTerminal()
 	p.marp, p.marpErr = findMarp()
-	if p.marpErr == nil {
-		p.cacheDir, p.marpErr = os.MkdirTemp("", "memo-slides-")
-	}
 }
 
 // テストで差し替える
 var (
 	findMarp = func() (slideRenderer, error) {
-		server, err := slides.Find()
+		client, err := slides.Connect()
 		if err != nil {
 			return nil, err
 		}
-		return server, nil
+		return client, nil
 	}
 	detectTerminal = graphics.Detect
 )
@@ -99,15 +96,18 @@ func (p *slidePane) request(source, dir string) {
 func (p *slidePane) start() {
 	p.rendering = true
 	p.gen++
-	gen, source, dir, out := p.gen, p.requested, p.dir, p.cacheDir
+	gen, source, dir := p.gen, p.requested, p.dir
 	go func() {
-		pages, err := p.marp.Render(source, dir, out)
+		pages, err := p.marp.Render(source, dir, func(message string) {
+			p.post(func() { p.progress = message })
+		})
 		p.post(func() { p.finished(gen, pages, err) })
 	}()
 }
 
 func (p *slidePane) finished(gen int, pages []string, err error) {
 	p.rendering = false
+	p.progress = ""
 	p.err = err
 	if err == nil && gen == p.gen {
 		p.pages = pages
@@ -147,9 +147,14 @@ func (p *slidePane) draw(s tcell.Screen, r rect, t theme.Theme, index, total int
 	cols := inner.w
 	rows := min(inner.h-2, graphics.MaxRows(), (cols*9+16)/32) // 16:9 を、縦長のマス (幅:高さ ≒ 1:2) で
 	message := p.problem()
-	if message == nil && index-1 < len(p.pages) && rows > 0 {
+	if message == nil && p.progress != "" {
+		message = errors.New(p.progress)
+	}
+	if p.problem() == nil && index-1 < len(p.pages) && rows > 0 {
 		p.place(s, rect{inner.x, inner.y + 2, cols, rows}, p.pages[index-1], base)
-		message = p.err
+		if p.err != nil {
+			message = p.err
+		}
 		inner.y += rows + 3
 		inner.h -= rows + 3
 	} else {
@@ -200,7 +205,7 @@ func (p *slidePane) flush(s tcell.Screen) {
 	p.pending = ""
 }
 
-// close は端末から画像を消し、書き出した画像を片付ける。
+// close は端末から画像を消し、描画サーバーとのつながりを切る。
 func (p *slidePane) close(s tcell.Screen) {
 	if p.shown.path != "" {
 		p.pending = p.term.Delete(slideImageID)
@@ -208,8 +213,5 @@ func (p *slidePane) close(s tcell.Screen) {
 	}
 	if p.marp != nil {
 		p.marp.Close()
-	}
-	if p.cacheDir != "" {
-		_ = os.RemoveAll(p.cacheDir)
 	}
 }

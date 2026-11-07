@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "description": "memo に埋め込む marp-core (ブラウザ用の1ファイル) を作る",
+  "scripts": {
+    "build": "esbuild entry.js --bundle --minify --format=iife --platform=browser --legal-comments=external --outfile=../../internal/slides/marp.js"
+  },
+  "devDependencies": {
+    "@marp-team/marp-core": "4.4.0",
+    "esbuild": "0.25.0"
+  }
+}

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -8,14 +9,14 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/Mojashi/memo/internal/graphics"
-	"github.com/Mojashi/memo/internal/slides"
 	"github.com/Mojashi/memo/internal/textbuf"
 )
 
 // fakeMarp はスライドの枚数ぶんの画像のパスを返す (ファイルは書かない)。
 type fakeMarp struct{ calls int }
 
-func (f *fakeMarp) Render(source, dir, out string) ([]string, error) {
+func (f *fakeMarp) Render(source, dir string, status func(string)) ([]string, error) {
+	const out = "/cache"
 	f.calls++
 	pages := strings.Count(source, "\n---\n")
 	var paths []string
@@ -81,12 +82,12 @@ func TestMarpShowsCurrentSlideImage(t *testing.T) {
 	h.lacks("▶ スライド")
 }
 
-func TestMarpWithoutCLIExplainsHowToInstall(t *testing.T) {
-	withSlides(t, nil, slides.ErrNoMarp, nil)
+func TestSlideRendererProblemIsShown(t *testing.T) {
+	withSlides(t, nil, errors.New("Chrome が見つかりません。Chrome を入れてください"), nil)
 	h := start(t, map[string]string{"deck.md": deck}, "deck.md")
 	h.screen.SetSize(140, 40)
 	h.app.draw()
-	h.contains("npm i -g @marp-team/marp-cli")
+	h.contains("Chrome が見つかりません")
 }
 
 func TestPlainMarkdownHasNoSlidePane(t *testing.T) {
